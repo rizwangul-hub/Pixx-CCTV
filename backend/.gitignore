@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Dependencies
+node_modules/
+
+# Storage & Private Snapshots
+storage/
+*.jpg
+*.jpeg
+models/
+*.onnx
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+logs/
+*.log
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

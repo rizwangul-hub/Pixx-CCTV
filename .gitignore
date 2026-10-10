@@ -1,0 +1,57 @@
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.cert
+credentials.json
+
+# Node / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.next/
+out/
+
+# Python / Camera Agent & Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Media, CCTV Records & Local Captures
+recordings/
+captures/
+*.mp4
+*.avi
+*.mkv
+*.h264
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+logs/
+*.log
+
+# IDE & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

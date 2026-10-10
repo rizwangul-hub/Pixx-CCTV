@@ -1,0 +1,21 @@
+{
+  "name": "pixx-bicycle-cctv-backend",
+  "version": "1.0.0",
+  "description": "Backend API service for Pixx Bicycle CCTV monitoring system",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jpeg-js": "^0.4.4",
+    "onnxruntime-node": "^1.30.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
