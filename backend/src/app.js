@@ -23,6 +23,11 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Support JPEG uploads while preventing memory exhaustion DoS
 
 // Routes
+app.get('/', (req, res) => {
+  res.redirect('/api/workers/review-interface');
+});
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 app.use('/api', healthRoutes);
 app.use('/api', detectionRoutes);
 app.use('/api/cameras', cameraRoutes);

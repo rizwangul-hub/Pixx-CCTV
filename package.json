@@ -1,0 +1,17 @@
+{
+  "name": "pixx-bicycle-cctv",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pixx Bicycle CCTV monitoring system root package",
+  "scripts": {
+    "start": "node backend/src/server.js",
+    "test": "cd backend && npm test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jpeg-js": "^0.4.4",
+    "onnxruntime-node": "^1.30.0"
+  }
+}

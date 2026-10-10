@@ -5,8 +5,12 @@ const cameraService = require('./cameraService');
 const { SNAPSHOT_STORAGE_DIR, SNAPSHOT_RETENTION_HOURS } = require('../config/env');
 
 // Ensure private storage directory exists
-if (!fs.existsSync(SNAPSHOT_STORAGE_DIR)) {
-  fs.mkdirSync(SNAPSHOT_STORAGE_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(SNAPSHOT_STORAGE_DIR)) {
+    fs.mkdirSync(SNAPSHOT_STORAGE_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.warn(`[WARN] Could not create snapshot storage dir (${SNAPSHOT_STORAGE_DIR}): ${err.message}`);
 }
 
 // In-memory snapshot event store

@@ -183,13 +183,48 @@ const getStationRoiOverlay = async (req, res, next) => {
     let detections = [];
 
     if (req.query?.eventId) {
-      const filePath = snapshotService.getSnapshotFilePath(req.query.eventId);
+      const cleanEventId = String(req.query.eventId).replace(/\.jpg$/i, '');
+      const filePath = snapshotService.getSnapshotFilePath(cleanEventId);
       if (filePath && fs.existsSync(filePath)) {
         imageBuffer = fs.readFileSync(filePath);
       }
     }
 
-    // Fallback to real Station snapshot if available
+    // Load most recent Station snapshot if available
+    if (!imageBuffer) {
+      const latestSnapshots = snapshotService.listSnapshotsByShop('station');
+      for (const snap of latestSnapshots) {
+        if (snap.eventId) {
+          const filePath = snapshotService.getSnapshotFilePath(snap.eventId);
+          if (filePath && fs.existsSync(filePath)) {
+            imageBuffer = fs.readFileSync(filePath);
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: check disk for the most recent snap_station_*.jpg
+    if (!imageBuffer && fs.existsSync(SNAPSHOT_STORAGE_DIR)) {
+      try {
+        const files = fs.readdirSync(SNAPSHOT_STORAGE_DIR)
+          .filter((f) => f.startsWith('snap_station_') && f.endsWith('.jpg'))
+          .map((f) => {
+            const p = path.join(SNAPSHOT_STORAGE_DIR, f);
+            return { path: p, mtime: fs.statSync(p).mtimeMs };
+          })
+          .sort((a, b) => b.mtime - a.mtime);
+
+        for (const f of files) {
+          if (fs.existsSync(f.path) && fs.statSync(f.path).size > 1000) {
+            imageBuffer = fs.readFileSync(f.path);
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Baseline fallback if no snapshots exist
     if (!imageBuffer) {
       const realSnapshotPath = path.join(SNAPSHOT_STORAGE_DIR, 'snap_station_1791559172253_acdd72bd.jpg');
       if (fs.existsSync(realSnapshotPath)) {
@@ -209,6 +244,9 @@ const getStationRoiOverlay = async (req, res, next) => {
     const overlayJpeg = detectionService.generateRoiOverlay(imageBuffer, detections);
 
     res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.setHeader('Content-Disposition', 'inline; filename="station_camera_05_roi_overlay.jpg"');
     res.send(overlayJpeg);
   } catch (error) {

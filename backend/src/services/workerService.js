@@ -1,8 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
-const WORKERS_DIR = path.join(__dirname, '../../storage/workers');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const WORKERS_DIR = isServerless
+  ? path.join(os.tmpdir(), 'pixx-cctv', 'workers')
+  : path.join(__dirname, '../../storage/workers');
 const WORKERS_FILE = path.join(WORKERS_DIR, 'station_workers.json');
 const ATTENDANCE_FILE = path.join(WORKERS_DIR, 'attendance_records.json');
 
@@ -38,8 +42,12 @@ let workers = [];
 let attendanceRecords = [];
 
 const ensureStorageDir = () => {
-  if (!fs.existsSync(WORKERS_DIR)) {
-    fs.mkdirSync(WORKERS_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(WORKERS_DIR)) {
+      fs.mkdirSync(WORKERS_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn(`[WARN] Could not create workers directory (${WORKERS_DIR}): ${err.message}`);
   }
 };
 

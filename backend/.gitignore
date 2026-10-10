@@ -13,8 +13,10 @@ node_modules/
 storage/
 *.jpg
 *.jpeg
-models/
+models/*
+!models/yolov8n.onnx
 *.onnx
+!models/yolov8n.onnx
 
 # Logs
 npm-debug.log*

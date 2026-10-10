@@ -173,6 +173,9 @@ const listAttendanceRecords = (req, res, next) => {
  */
 const renderReviewInterface = (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.setHeader('Content-Security-Policy', "default-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;");
 
   const html = `<!DOCTYPE html>
@@ -485,13 +488,19 @@ const renderReviewInterface = (req, res) => {
               <span id="snapshot-resolution">Resolution: 704 &times; 576 (4CIF)</span>
               <span>Bay ROI: Calibrated Polygon</span>
             </div>
-            <div class="panel-actions">
-              <button id="btn-refresh-snapshot" class="btn btn-secondary" onclick="refreshCameraSnapshot()">
-                <span>&#8635;</span> Refresh Snapshot
-              </button>
-              <button id="btn-detect-person" class="btn btn-primary" onclick="runPersonDetection()">
-                <span>&#128065;</span> Detect Person (AI Inference)
-              </button>
+            <div class="panel-actions" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+              <div style="display: flex; gap: 8px;">
+                <button id="btn-refresh-snapshot" class="btn btn-secondary" onclick="refreshCameraSnapshot()">
+                  <span>&#8635;</span> Refresh Snapshot
+                </button>
+                <button id="btn-detect-person" class="btn btn-primary" onclick="runPersonDetection()">
+                  <span>&#128065;</span> Detect Person (AI Inference)
+                </button>
+              </div>
+              <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;">
+                <input type="checkbox" id="chk-auto-refresh" onchange="toggleAutoRefresh(this.checked)" checked style="cursor: pointer;">
+                Auto-refresh: <strong id="auto-refresh-timer" style="color: #60a5fa;">15s</strong>
+              </label>
             </div>
             <div id="snapshot-status-msg" style="margin-top: 10px; font-size: 12px; color: var(--text-muted);"></div>
           </div>
@@ -709,13 +718,70 @@ const renderReviewInterface = (req, res) => {
       }
     }
 
-    async function loadRoiImage() {
+    let activeSnapshotEventId = null;
+    let autoRefreshCountdown = 15;
+    let autoRefreshTimer = null;
+
+    function resetAutoRefreshCountdown() {
+      autoRefreshCountdown = 15;
+      const label = document.getElementById('auto-refresh-timer');
+      if (label) label.textContent = autoRefreshCountdown + 's';
+    }
+
+    function toggleAutoRefresh(enabled) {
+      if (enabled) {
+        startAutoRefresh();
+      } else {
+        stopAutoRefresh();
+        const label = document.getElementById('auto-refresh-timer');
+        if (label) label.textContent = 'Paused';
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      resetAutoRefreshCountdown();
+      autoRefreshTimer = setInterval(() => {
+        autoRefreshCountdown--;
+        const label = document.getElementById('auto-refresh-timer');
+        if (label && autoRefreshTimer) label.textContent = autoRefreshCountdown + 's';
+        if (autoRefreshCountdown <= 0) {
+          resetAutoRefreshCountdown();
+          const detTab = document.getElementById('tab-detection');
+          if (detTab && detTab.style.display !== 'none') {
+            loadRoiImage();
+            loadSchedulerStatus();
+          }
+        }
+      }, 1000);
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+    }
+
+    async function loadRoiImage(eventId = null) {
       const img = document.getElementById('roi-image');
       const timeElem = document.getElementById('snapshot-timestamp');
       if (!img) return;
 
+      if (eventId) {
+        activeSnapshotEventId = eventId;
+      }
+
+      // If explicit eventId is passed, use it; otherwise request newest available frame with cache-busting timestamp
+      const queryParam = eventId
+        ? '?eventId=' + encodeURIComponent(eventId.replace(/\.jpg$/i, '')) + '&t=' + Date.now()
+        : '?t=' + Date.now();
+
       try {
-        const res = await fetch('/api/cameras/station/roi-overlay', { headers: getHeaders() });
+        const res = await fetch('/api/cameras/station/roi-overlay' + queryParam, {
+          headers: getHeaders(),
+          cache: 'no-store'
+        });
         if (res.status === 401) {
           img.alt = 'Authentication required. Enter Admin API Key above.';
           if (timeElem) timeElem.textContent = 'Auth required';
@@ -727,6 +793,9 @@ const renderReviewInterface = (req, res) => {
           return;
         }
         const blob = await res.blob();
+        if (img.src && img.src.startsWith('blob:')) {
+          URL.revokeObjectURL(img.src);
+        }
         img.src = URL.createObjectURL(blob);
         img.alt = 'Station Camera 05 Workshop Bay Overlay';
         if (timeElem) {
@@ -744,14 +813,15 @@ const renderReviewInterface = (req, res) => {
       const statusMsg = document.getElementById('snapshot-status-msg');
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Capturing Snapshot...';
+        btn.innerHTML = '<span class="spinner"></span> Capturing Frame...';
       }
-      if (statusMsg) statusMsg.textContent = 'Requesting fresh frame from Camera 05...';
+      if (statusMsg) statusMsg.textContent = 'Connecting to Station DVR Channel 501...';
 
       try {
         const res = await fetch('/api/cameras/station/snapshot', {
           method: 'POST',
-          headers: getHeaders()
+          headers: getHeaders(),
+          cache: 'no-store'
         });
 
         if (res.status === 401) {
@@ -761,12 +831,16 @@ const renderReviewInterface = (req, res) => {
 
         const data = await res.json();
         if (res.ok && data.event) {
-          if (statusMsg) statusMsg.textContent = 'Snapshot captured: ' + data.event.snapshotRef + ' (' + data.event.fileSizeBytes + ' bytes)';
+          const snapRef = data.event.snapshotRef || data.event.eventId;
+          if (statusMsg) {
+            statusMsg.innerHTML = '<span style="color:#10b981;">&#10003; Live frame captured: <code>' + snapRef + '</code> (' + (data.event.fileSizeBytes || 0) + ' bytes)</span>';
+          }
+          await loadRoiImage(data.event.eventId);
         } else {
           if (statusMsg) statusMsg.textContent = data.details || data.message || 'Snapshot refreshed';
+          await loadRoiImage();
         }
-
-        await loadRoiImage();
+        resetAutoRefreshCountdown();
       } catch (err) {
         if (statusMsg) statusMsg.textContent = 'Snapshot error: ' + err.message;
       } finally {
@@ -845,8 +919,11 @@ const renderReviewInterface = (req, res) => {
         if (resultBox) resultBox.innerHTML = resultHtml;
 
         // Auto refresh candidate list and ROI image
-        await loadRoiImage();
+        const snapRef = data.snapshotRef || '';
+        const snapId = snapRef.replace(/\\.jpg$/i, '');
+        await loadRoiImage(snapId || null);
         await loadEvents();
+        resetAutoRefreshCountdown();
       } catch (err) {
         if (resultBox) {
           resultBox.innerHTML = '<p style="color: var(--danger);">&#9888; Network / Execution Error: ' + err.message + '</p>';
@@ -1049,28 +1126,28 @@ const renderReviewInterface = (req, res) => {
             ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(r.lastSeenTime))
             : 'Active';
 
-          return `
+          return \`
             <tr>
-              <td><code>${r.attendanceId}</code></td>
-              <td><strong>${r.workerName}</strong> (<code>${r.workerId}</code>)</td>
-              <td>${arrUkTime}</td>
-              <td>${exitUkTime}</td>
-              <td>${r.dwellTimeSeconds}s</td>
+              <td><code>\${r.attendanceId}</code></td>
+              <td><strong>\${r.workerName}</strong> (<code>\${r.workerId}</code>)</td>
+              <td>\${arrUkTime}</td>
+              <td>\${exitUkTime}</td>
+              <td>\${r.dwellTimeSeconds}s</td>
               <td>
-                ${r.uncertainTimes
+                \${r.uncertainTimes
                   ? '<span class="badge badge-warning" title="' + (r.uncertaintyReasons || []).join(', ') + '">&#9888; Uncertain Boundary</span>'
                   : '<span class="badge badge-success">&#10003; Confirmed Sustained</span>'}
               </td>
-              <td><span class="badge badge-success">${r.reviewStatus}</span></td>
+              <td><span class="badge badge-success">\${r.reviewStatus}</span></td>
               <td><span class="badge badge-info">none</span></td>
               <td>
-                <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="downloadArrivalPhoto('${r.eventId}')">
+                <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="downloadArrivalPhoto('\${r.eventId}')">
                   📸 Download Photo
                 </button>
               </td>
-              <td>${r.confirmedBy}</td>
+              <td>\${r.confirmedBy}</td>
             </tr>
-          `;
+          \`;
         }).join('');
       } catch (err) {
         console.error('Failed to load attendance:', err);
@@ -1171,13 +1248,13 @@ const renderReviewInterface = (req, res) => {
         badge.textContent = data.running ? '● Running (20s)' : 'Paused';
         badge.className = data.running ? 'badge badge-success' : 'badge badge-warning';
 
-        strip.innerHTML = `
-          <div><strong>London Civil Time:</strong> ${data.londonCivilTime} (Shift: ${data.withinShiftHours ? '<span style="color:#10b981;">Open 08:30–18:00</span>' : '<span style="color:#f59e0b;">Closed</span>'})</div>
-          <div><strong>Channel:</strong> ${data.channel} &bull; <strong>Confidence Threshold:</strong> ${data.confidenceThreshold}</div>
-          <div><strong>Cycles Executed:</strong> ${data.totalCycles} &bull; <strong>Successful:</strong> ${data.successfulCycles} &bull; <strong>Failures:</strong> ${data.failedCycles} (${data.consecutiveFailures} consecutive)</div>
-          <div><strong>New Arrivals Captured:</strong> <span style="color:#10b981;font-weight:600;">${data.arrivalsDetectedCount}</span> &bull; <strong>Last Status:</strong> <code>${data.lastStatus}</code></div>
-          ${data.lastError ? '<div style="color:#ef4444;margin-top:4px;"><strong>Last Error:</strong> ' + data.lastError + '</div>' : ''}
-        `;
+        strip.innerHTML = \`
+          <div><strong>London Civil Time:</strong> \${data.londonCivilTime} (Shift: \${data.withinShiftHours ? '<span style="color:#10b981;">Open 08:30–18:00</span>' : '<span style="color:#f59e0b;">Closed</span>'})</div>
+          <div><strong>Channel:</strong> \${data.channel} &bull; <strong>Confidence Threshold:</strong> \${data.confidenceThreshold}</div>
+          <div><strong>Cycles Executed:</strong> \${data.totalCycles} &bull; <strong>Successful:</strong> \${data.successfulCycles} &bull; <strong>Failures:</strong> \${data.failedCycles} (\${data.consecutiveFailures} consecutive)</div>
+          <div><strong>New Arrivals Captured:</strong> <span style="color:#10b981;font-weight:600;">\${data.arrivalsDetectedCount}</span> &bull; <strong>Last Status:</strong> <code>\${data.lastStatus}</code></div>
+          \${data.lastError ? '<div style="color:#ef4444;margin-top:4px;"><strong>Last Error:</strong> ' + data.lastError + '</div>' : ''}
+        \`;
       } catch (err) {
         if (strip) strip.textContent = 'Failed to load scheduler telemetry: ' + err.message;
       }
@@ -1268,7 +1345,7 @@ const renderReviewInterface = (req, res) => {
 
     async function downloadArrivalPhoto(eventId) {
       try {
-        const res = await fetch(`/api/workers/events/${eventId}/snapshot`, { headers: getHeaders() });
+        const res = await fetch(\`/api/workers/events/\${eventId}/snapshot\`, { headers: getHeaders() });
         if (!res.ok) {
           alert('Could not download snapshot: HTTP ' + res.status);
           return;
@@ -1276,7 +1353,7 @@ const renderReviewInterface = (req, res) => {
         const blob = await res.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `${eventId}.jpg`;
+        a.download = \`\${eventId}.jpg\`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1286,11 +1363,11 @@ const renderReviewInterface = (req, res) => {
     }
 
     function shareCandidateSnippet(eventId, ukTimeStr, confPercent, role) {
-      const snippet = `📸 Station Cycles Camera 05 — Arrival Candidate\nEvent: ${eventId}\nTime: ${ukTimeStr}\nRole: ${role}\nConfidence: ${confPercent}%\nStatus: Pending Manager Verification`;
+      const snippet = \`📸 Station Cycles Camera 05 — Arrival Candidate\\nEvent: \${eventId}\\nTime: \${ukTimeStr}\\nRole: \${role}\\nConfidence: \${confPercent}%\\nStatus: Pending Manager Verification\`;
       navigator.clipboard.writeText(snippet).then(() => {
-        alert('Candidate arrival snippet copied to clipboard!\n\n' + snippet);
+        alert('Candidate arrival snippet copied to clipboard!\\n\\n' + snippet);
       }).catch(() => {
-        alert('Snippet:\n\n' + snippet);
+        alert('Snippet:\\n\\n' + snippet);
       });
     }
 
@@ -1319,6 +1396,7 @@ const renderReviewInterface = (req, res) => {
         }
       }
       loadAll();
+      startAutoRefresh();
     });
   </script>
 </body>

@@ -1,14 +1,23 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const jpeg = require('jpeg-js');
-const ort = require('onnxruntime-node');
+let ort = null;
+try {
+  ort = require('onnxruntime-node');
+} catch (err) {
+  console.warn(`[WARN] onnxruntime-node could not be loaded: ${err.message}`);
+}
 const workerService = require('./workerService');
 
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const MODEL_PATH = path.join(__dirname, '../../models/yolov8n.onnx');
 let sessionPromise = null;
 
-const SESSIONS_DIR = path.join(__dirname, '../../storage/sessions');
+const SESSIONS_DIR = isServerless
+  ? path.join(os.tmpdir(), 'pixx-cctv', 'sessions')
+  : path.join(__dirname, '../../storage/sessions');
 const SESSIONS_FILE = path.join(SESSIONS_DIR, 'active_sessions.json');
 const WORKER_EVENTS_FILE = path.join(SESSIONS_DIR, 'worker_events.json');
 
@@ -28,8 +37,12 @@ let manualAuditCorrections = [];
  * Ensures sessions storage directory exists.
  */
 const ensureSessionsDir = () => {
-  if (!fs.existsSync(SESSIONS_DIR)) {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(SESSIONS_DIR)) {
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn(`[WARN] Could not create sessions directory (${SESSIONS_DIR}): ${err.message}`);
   }
 };
 
@@ -121,6 +134,9 @@ loadWorkerEventsFromDisk();
  */
 const getSession = async () => {
   if (!sessionPromise) {
+    if (!ort) {
+      throw new Error('ONNX runtime (onnxruntime-node) is not available in this environment');
+    }
     if (!fs.existsSync(MODEL_PATH)) {
       throw new Error(`YOLOv8n ONNX model not found at ${MODEL_PATH}`);
     }

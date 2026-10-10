@@ -137,12 +137,9 @@ const runDetectionCycle = async (options = {}) => {
     // 5. If no new arrival (either 0 persons detected, or person merged into existing session):
     // Do NOT keep redundant routine polling snapshots on disk.
     // If it was captured during this cycle and not needed for a new arrival event, remove routine frame.
-    if (!options.mockBuffer && snapshotEvent?.snapshotRef && !options.keepRoutineFrames) {
+    if (!options.mockBuffer && snapshotEvent?.eventId && !options.keepRoutineFrames) {
       try {
-        const filePath = path.join(SNAPSHOT_STORAGE_DIR, snapshotEvent.snapshotRef);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
+        snapshotService.deleteSnapshot(snapshotEvent.eventId);
       } catch (_) {}
     }
 
