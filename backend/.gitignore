@@ -13,6 +13,8 @@ node_modules/
 storage/
 *.jpg
 *.jpeg
+!src/assets/*.jpg
+!src/assets/*.jpeg
 models/*
 !models/yolov8n.onnx
 *.onnx
