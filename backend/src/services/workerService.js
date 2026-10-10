@@ -10,6 +10,13 @@ const WORKERS_DIR = isServerless
 const WORKERS_FILE = path.join(WORKERS_DIR, 'station_workers.json');
 const ATTENDANCE_FILE = path.join(WORKERS_DIR, 'attendance_records.json');
 
+const AUTHORIZED_SHOPS = ['station', 'camden', 'chelsea', 'edgeware', 'southwark', 'leabridge'];
+
+const isAuthorizedShop = (shopId) => {
+  if (!shopId || typeof shopId !== 'string') return false;
+  return AUTHORIZED_SHOPS.includes(shopId.toLowerCase());
+};
+
 // Default initial roster for Station Cycles workshop
 const DEFAULT_STATION_WORKERS = [
   {
@@ -17,6 +24,7 @@ const DEFAULT_STATION_WORKERS = [
     name: 'Dave Miller',
     role: 'Senior Mechanic',
     shopId: 'station',
+    shiftStart: '08:30',
     active: true,
     createdAt: '2026-10-01T08:00:00.000Z'
   },
@@ -25,6 +33,7 @@ const DEFAULT_STATION_WORKERS = [
     name: 'Sarah Jenkins',
     role: 'Bicycle Technician',
     shopId: 'station',
+    shiftStart: '08:30',
     active: true,
     createdAt: '2026-10-01T08:00:00.000Z'
   },
@@ -33,6 +42,7 @@ const DEFAULT_STATION_WORKERS = [
     name: 'Alex Rivera',
     role: 'Workshop Apprentice',
     shopId: 'station',
+    shiftStart: '08:30',
     active: true,
     createdAt: '2026-10-01T08:00:00.000Z'
   }
@@ -67,7 +77,7 @@ const loadWorkersFromDisk = () => {
   } catch (err) {
     console.warn(`[WARN] Failed to load workers from disk: ${err.message}`);
   }
-  // Initialize defaults
+  // Initialize defaults for Station
   workers = JSON.parse(JSON.stringify(DEFAULT_STATION_WORKERS));
   saveWorkersToDisk();
 };
@@ -120,15 +130,15 @@ loadWorkersFromDisk();
 loadAttendanceFromDisk();
 
 /**
- * List workers for Station Cycles.
- * Strictly limited to Station shop.
+ * List workers for any authorized shop.
  */
 const listWorkers = ({ shopId = 'station', activeOnly = false } = {}) => {
-  if (shopId && shopId.toLowerCase() !== 'station') {
-    throw new Error('Worker management is currently restricted to Station Cycles only');
+  const normShop = (shopId || 'station').toLowerCase();
+  if (!isAuthorizedShop(normShop)) {
+    throw new Error(`Shop '${shopId}' is not an authorized shop`);
   }
 
-  let list = workers.filter((w) => w.shopId.toLowerCase() === 'station');
+  let list = workers.filter((w) => w.shopId.toLowerCase() === normShop);
   if (activeOnly) {
     list = list.filter((w) => w.active === true);
   }
@@ -144,11 +154,12 @@ const getWorkerById = (workerId) => {
 };
 
 /**
- * Create a new worker profile for Station Cycles.
+ * Create a new worker profile for an authorized shop.
  */
-const createWorker = ({ name, role, shopId = 'station' }) => {
-  if (!shopId || shopId.toLowerCase() !== 'station') {
-    throw new Error('Worker management is currently restricted to Station Cycles only');
+const createWorker = ({ name, role, shopId = 'station', shiftStart = '08:30' }) => {
+  const normShop = (shopId || 'station').toLowerCase();
+  if (!isAuthorizedShop(normShop)) {
+    throw new Error(`Shop '${shopId}' is not an authorized shop`);
   }
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('Worker name is required');
@@ -157,12 +168,14 @@ const createWorker = ({ name, role, shopId = 'station' }) => {
     throw new Error('Worker role is required');
   }
 
-  const workerId = `worker_st_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const prefix = normShop.slice(0, 2);
+  const workerId = `worker_${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
   const newWorker = {
     workerId,
     name: name.trim(),
     role: role.trim(),
-    shopId: 'station',
+    shopId: normShop,
+    shiftStart: shiftStart && typeof shiftStart === 'string' ? shiftStart.trim() : '08:30',
     active: true,
     createdAt: new Date().toISOString()
   };
@@ -185,6 +198,9 @@ const updateWorker = (workerId, updates = {}) => {
   if (updates.role && typeof updates.role === 'string' && updates.role.trim()) {
     worker.role = updates.role.trim();
   }
+  if (updates.shiftStart && typeof updates.shiftStart === 'string') {
+    worker.shiftStart = updates.shiftStart.trim();
+  }
   if (typeof updates.active === 'boolean') {
     worker.active = updates.active;
   }
@@ -202,8 +218,47 @@ const deactivateWorker = (workerId) => {
 };
 
 /**
+ * Computes late minutes against configured shift start in Europe/London civil time.
+ */
+const calculateLatenessLondon = (arrivalIso, shiftStartStr = '08:30') => {
+  try {
+    const arrivalDate = new Date(arrivalIso);
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(arrivalDate);
+    const hourPart = parts.find((p) => p.type === 'hour')?.value;
+    const minPart = parts.find((p) => p.type === 'minute')?.value;
+    if (!hourPart || !minPart) {
+      return { lateMinutes: 0, arrivalUkFormatted: arrivalIso, scheduledStart: shiftStartStr || '08:30' };
+    }
+
+    const arrHour = parseInt(hourPart, 10);
+    const arrMin = parseInt(minPart, 10);
+    const arrivalMins = arrHour * 60 + arrMin;
+
+    const [shHour, shMin] = (shiftStartStr || '08:30').split(':').map(Number);
+    const shiftMins = (shHour || 0) * 60 + (shMin || 0);
+
+    const lateMinutes = arrivalMins > shiftMins ? arrivalMins - shiftMins : 0;
+    const arrivalUkFormatted = `${hourPart}:${minPart} UK Time`;
+
+    return {
+      lateMinutes,
+      arrivalUkFormatted,
+      scheduledStart: shiftStartStr || '08:30'
+    };
+  } catch (_) {
+    return { lateMinutes: 0, arrivalUkFormatted: arrivalIso, scheduledStart: shiftStartStr || '08:30' };
+  }
+};
+
+/**
  * Links a manager-confirmed worker event to the worker's attendance record.
- * Evaluates uncertain entry/exit flags and guarantees zero automated payroll impact.
+ * Evaluates lateness, uncertainty flags, reliable departures, and guarantees zero automated payroll impact.
  */
 const linkEventToWorkerAttendance = (workerEvent, worker, managerId = 'admin', options = {}) => {
   if (!worker || !worker.workerId) {
@@ -216,12 +271,8 @@ const linkEventToWorkerAttendance = (workerEvent, worker, managerId = 'admin', o
   const nowIso = new Date().toISOString();
   const eventTime = workerEvent.timestamp || nowIso;
   const eventDate = eventTime.slice(0, 10); // YYYY-MM-DD
+  const shopId = (worker.shopId || workerEvent.shopId || 'station').toLowerCase();
 
-  // Determine uncertainty flags:
-  // - single snapshot detection (cannot guarantee exact clock-in or sustained shift work)
-  // - dwell duration < 60 seconds
-  // - activity outside standard shift hours
-  // - explicit manager override
   const reasons = [];
   let uncertainTimes = false;
 
@@ -242,41 +293,81 @@ const linkEventToWorkerAttendance = (workerEvent, worker, managerId = 'admin', o
     uncertainTimes = options.uncertainTimes;
   }
 
-  // Check if an attendance record for this event already exists
+  // Calculate lateness using worker's shift start in London timezone
+  const shiftStart = worker.shiftStart || '08:30';
+  const observedArrival = options.firstSeenTime || eventTime;
+  const { lateMinutes, arrivalUkFormatted, scheduledStart } = calculateLatenessLondon(observedArrival, shiftStart);
+
+  // Reliable departure handling:
+  // "Record departure only when a real, sufficiently reliable departure event is available.
+  // Do not invent departure times from missing detections."
+  const departureTime = options.departureTime || (options.isDepartureVerified ? (options.lastSeenTime || null) : null);
+  const departureStatus = departureTime ? 'confirmed_departure' : 'active_not_departed';
+  const departureEvidence = departureTime ? (options.departureEvidence || options.lastSnapshotRef || null) : null;
+
+  // Proposed deduction displayed separately, strictly requiring human approval:
+  const proposedDeduction = {
+    lateMinutes,
+    formula: lateMinutes > 0 ? `${lateMinutes} min late vs ${scheduledStart} start` : 'On time / early',
+    estimatedDeduction: lateMinutes > 0 ? `£${(lateMinutes * 0.25).toFixed(2)}` : '£0.00',
+    approvalStatus: 'requires_authorized_human_approval',
+    approvedBy: null,
+    approvedAt: null
+  };
+
   let record = attendanceRecords.find((r) => r.eventId === workerEvent.eventId);
 
   if (record) {
-    // Reassignment or update
+    // Reassignment or update with audit record
     record.workerId = worker.workerId;
     record.workerName = worker.name;
+    record.shopId = shopId;
+    record.scheduledStart = scheduledStart;
+    record.observedArrival = observedArrival;
+    record.arrivalUkFormatted = arrivalUkFormatted;
+    record.lateMinutes = lateMinutes;
+    record.departureTime = departureTime;
+    record.departureStatus = departureStatus;
+    record.departureEvidence = departureEvidence;
+    record.arrivalEvidence = workerEvent.snapshotRef || record.arrivalEvidence || null;
+    record.proposedDeduction = proposedDeduction;
     record.uncertainTimes = uncertainTimes;
     record.uncertaintyReasons = reasons;
     record.updatedAt = nowIso;
     record.updatedBy = managerId;
     record.reviewerNotes = workerEvent.reviewerNotes || null;
   } else {
-    // Create new attendance record
     const attendanceId = `att_${worker.workerId}_${workerEvent.eventId}`;
     record = {
       attendanceId,
       workerId: worker.workerId,
       workerName: worker.name,
-      shopId: 'station',
-      cameraLabel: 'Camera 05',
+      shopId,
+      cameraLabel: workerEvent.cameraLabel || (shopId === 'station' ? 'Camera 05' : 'CCTV Camera'),
       eventId: workerEvent.eventId,
       sessionId: workerEvent.sessionId || null,
       date: eventDate,
       timestamp: eventTime,
-      firstSeenTime: options.firstSeenTime || eventTime,
+      scheduledStart,
+      observedArrival,
+      firstSeenTime: observedArrival,
       lastSeenTime: options.lastSeenTime || eventTime,
+      arrivalUkFormatted,
+      lateMinutes,
+      departureTime,
+      departureStatus,
+      departureEvidence,
+      arrivalEvidence: workerEvent.snapshotRef || null,
       dwellTimeSeconds: dwellSec,
       sampleCount,
       detectionConfidence: workerEvent.detectionConfidence || null,
       uncertainTimes,
       uncertaintyReasons: reasons,
       reviewStatus: 'confirmed_presence',
+      proposedDeduction,
       payrollImpact: 'none', // Strictly guaranteed: payroll deductions disabled
       payrollDeductionsEnabled: false,
+      payrollApprovalRequired: true,
       confirmedBy: managerId,
       confirmedAt: nowIso,
       reviewerNotes: workerEvent.reviewerNotes || null
@@ -315,16 +406,19 @@ const getWorkerAttendance = (workerId, { date = null } = {}) => {
 
   const uncertainCount = list.filter((r) => r.uncertainTimes === true).length;
   const totalDwellSec = list.reduce((acc, cur) => acc + (cur.dwellTimeSeconds || 0), 0);
+  const totalLateMinutes = list.reduce((acc, cur) => acc + (cur.lateMinutes || 0), 0);
 
   return {
     workerId: worker.workerId,
     workerName: worker.name,
     role: worker.role,
-    shopId: 'station',
-    cameraLabel: 'Camera 05',
+    shopId: worker.shopId,
+    shiftStart: worker.shiftStart || '08:30',
+    cameraLabel: worker.shopId === 'station' ? 'Camera 05' : 'CCTV Camera',
     totalConfirmedEvents: list.length,
     uncertainTimesEventsCount: uncertainCount,
     totalDwellMinutes: Math.round(totalDwellSec / 60),
+    totalLateMinutes,
     payrollImpact: 'none',
     payrollDeductionsEnabled: false,
     payrollNotice: 'Automated payroll deductions and salary adjustments are disabled. Attendance records require manual review.',
@@ -333,14 +427,15 @@ const getWorkerAttendance = (workerId, { date = null } = {}) => {
 };
 
 /**
- * List all attendance records for Station Cycles.
+ * List all attendance records for an authorized shop.
  */
 const listAttendanceRecords = ({ shopId = 'station', date = null, workerId = null } = {}) => {
-  if (shopId && shopId.toLowerCase() !== 'station') {
-    throw new Error('Attendance records are currently restricted to Station Cycles only');
+  const normShop = (shopId || 'station').toLowerCase();
+  if (!isAuthorizedShop(normShop)) {
+    throw new Error(`Shop '${shopId}' is not an authorized shop`);
   }
 
-  let list = [...attendanceRecords];
+  let list = attendanceRecords.filter((r) => r.shopId.toLowerCase() === normShop);
   if (date) {
     list = list.filter((r) => r.date === date);
   }
@@ -349,8 +444,8 @@ const listAttendanceRecords = ({ shopId = 'station', date = null, workerId = nul
   }
 
   return {
-    shopId: 'station',
-    cameraLabel: 'Camera 05',
+    shopId: normShop,
+    cameraLabel: normShop === 'station' ? 'Camera 05' : 'CCTV Camera',
     count: list.length,
     payrollImpact: 'none',
     payrollDeductionsEnabled: false,
@@ -375,24 +470,28 @@ const resetWorkerService = () => {
  * Prepares a structured and formatted shareable attendance summary for group distribution.
  */
 const generateShareableAttendanceSummary = ({ shopId = 'station', date = null } = {}) => {
-  if (shopId && shopId.toLowerCase() !== 'station') {
-    throw new Error('Attendance summary is currently restricted to Station Cycles only');
+  const normShop = (shopId || 'station').toLowerCase();
+  if (!isAuthorizedShop(normShop)) {
+    throw new Error(`Shop '${shopId}' is not an authorized shop`);
   }
 
   const targetDate = date || new Date().toISOString().split('T')[0];
-  const list = attendanceRecords.filter((r) => r.date === targetDate);
+  const list = attendanceRecords.filter((r) => r.shopId.toLowerCase() === normShop && r.date === targetDate);
 
   let pendingCount = 0;
   try {
     const detectionService = require('./detectionService');
-    const pendingEvents = detectionService.listWorkerEvents({ reviewStatus: 'pending_review' });
+    const pendingEvents = detectionService.listWorkerEvents({ shopId: normShop, reviewStatus: 'pending_review' });
     pendingCount = pendingEvents ? pendingEvents.length : 0;
   } catch (_) {}
 
+  const shopName = normShop === 'station' ? 'STATION CYCLES' : normShop.toUpperCase();
+  const cameraLabel = normShop === 'station' ? 'Station Cycles Camera 05 (Workshop Bay Channel 501)' : `${normShop.toUpperCase()} CCTV Camera`;
+
   const textLines = [
-    `📋 STATION CYCLES — MORNING WORKER ARRIVAL REPORT`,
+    `📋 ${shopName} — MORNING WORKER ARRIVAL REPORT`,
     `📅 Date: ${targetDate}`,
-    `🏢 Camera: Station Cycles Camera 05 (Workshop Bay Channel 501)`,
+    `🏢 Camera: ${cameraLabel}`,
     `⏰ Generated: ${new Date().toLocaleString('en-GB', { timeZone: 'Europe/London' })} UK Time`,
     ``,
     `👥 CONFIRMED WORKER ARRIVALS (${list.length}):`
@@ -456,6 +555,7 @@ module.exports = {
   getWorkerAttendance,
   listAttendanceRecords,
   generateShareableAttendanceSummary,
+  calculateLatenessLondon,
   resetWorkerService,
   DEFAULT_STATION_WORKERS
 };

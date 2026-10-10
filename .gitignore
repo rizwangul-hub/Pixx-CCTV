@@ -34,6 +34,9 @@ pip-delete-this-directory.txt
 # Media, CCTV Records & Local Captures
 recordings/
 captures/
+storage/
+*.jpg
+*.jpeg
 *.mp4
 *.avi
 *.mkv

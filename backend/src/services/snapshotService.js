@@ -73,6 +73,49 @@ const sanitizeEvent = (event) => {
 };
 
 /**
+ * Saves a valid JPEG snapshot buffer to private storage in shop-specific folder.
+ * Verifies persistence on disk and returns the created event record.
+ */
+const saveSnapshot = (buffer, shopId = 'station', metadata = {}) => {
+  const normalizedId = String(shopId || 'station').toLowerCase();
+  const randomSuffix = crypto.randomBytes(4).toString('hex');
+  const eventId = metadata.eventId || `snap_${normalizedId}_${Date.now()}_${randomSuffix}`;
+  const filename = `${eventId}.jpg`;
+  const shopDir = path.join(SNAPSHOT_STORAGE_DIR, normalizedId);
+  try {
+    if (!fs.existsSync(shopDir)) {
+      fs.mkdirSync(shopDir, { recursive: true });
+    }
+  } catch (_) {}
+  const filePath = path.join(shopDir, filename);
+
+  fs.writeFileSync(filePath, buffer);
+
+  // Verify written file exists on disk and is non-empty
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) {
+    throw new Error('Snapshot file could not be verified on disk after writing');
+  }
+
+  const dimensions = getJpegDimensions(buffer);
+
+  const eventRecord = {
+    eventId,
+    shopId: normalizedId,
+    cameraLabel: metadata.cameraLabel || (normalizedId === 'station' ? 'Camera 05' : 'CCTV Camera'),
+    timestamp: metadata.timestamp || new Date().toISOString(),
+    snapshotRef: `${normalizedId}/${filename}`,
+    captureStatus: 'success',
+    fileSizeBytes: buffer.length,
+    mimeType: 'image/jpeg',
+    dimensions,
+    _localPath: filePath
+  };
+
+  snapshotEvents.unshift(eventRecord);
+  return eventRecord;
+};
+
+/**
  * Captures a single JPEG snapshot from a verified Hikvision ISAPI endpoint.
  */
 const captureSnapshot = async (shopId) => {
@@ -192,30 +235,7 @@ const captureSnapshot = async (shopId) => {
       };
     }
 
-    // Save image to private storage directory
-    const randomSuffix = crypto.randomBytes(4).toString('hex');
-    const eventId = `snap_${normalizedId}_${Date.now()}_${randomSuffix}`;
-    const filename = `${eventId}.jpg`;
-    const filePath = path.join(SNAPSHOT_STORAGE_DIR, filename);
-
-    fs.writeFileSync(filePath, buffer);
-
-    const dimensions = getJpegDimensions(buffer);
-
-    const eventRecord = {
-      eventId,
-      shopId: normalizedId,
-      cameraLabel: shop.cameraLabel,
-      timestamp: new Date().toISOString(),
-      snapshotRef: filename,
-      captureStatus: 'success',
-      fileSizeBytes: buffer.length,
-      mimeType: 'image/jpeg',
-      dimensions,
-      _localPath: filePath
-    };
-
-    snapshotEvents.unshift(eventRecord);
+    const eventRecord = saveSnapshot(buffer, normalizedId, { cameraLabel: shop.cameraLabel });
 
     return {
       status: 'success',
@@ -255,7 +275,8 @@ const SAFE_EVENT_ID_REGEX = /^[a-zA-Z0-9_-]{1,80}$/;
  */
 const isSafeEventId = (eventId) => {
   if (typeof eventId !== 'string') return false;
-  return SAFE_EVENT_ID_REGEX.test(eventId) && !eventId.includes('..') && !eventId.includes('/') && !eventId.includes('\\');
+  const clean = eventId.replace(/\.jpg$/i, '');
+  return SAFE_EVENT_ID_REGEX.test(clean) && !eventId.includes('..') && !eventId.includes('/') && !eventId.includes('\\');
 };
 
 /**
@@ -263,26 +284,21 @@ const isSafeEventId = (eventId) => {
  */
 const getSnapshotEvent = (eventId) => {
   if (!isSafeEventId(eventId)) return null;
+  const cleanId = String(eventId).replace(/\.jpg$/i, '');
 
-  let event = snapshotEvents.find((e) => e.eventId === eventId);
+  let event = snapshotEvents.find((e) => e.eventId === cleanId);
   if (!event) {
-    const filename = `${eventId}.jpg`;
-    const filePath = path.join(SNAPSHOT_STORAGE_DIR, filename);
-
-    // Verify resolved path stays strictly within SNAPSHOT_STORAGE_DIR
-    const resolvedPath = path.resolve(filePath);
-    const resolvedBase = path.resolve(SNAPSHOT_STORAGE_DIR);
-    if (!resolvedPath.startsWith(resolvedBase)) return null;
-
-    if (fs.existsSync(filePath)) {
+    const filePath = getSnapshotFilePath(cleanId);
+    if (filePath && fs.existsSync(filePath)) {
       const stat = fs.statSync(filePath);
-      const parts = eventId.split('_');
+      const parts = cleanId.split('_');
+      const shopId = parts[1] || 'station';
       event = {
-        eventId,
-        shopId: parts[1] || 'station',
+        eventId: cleanId,
+        shopId,
         cameraLabel: 'Camera 05',
         timestamp: stat.mtime.toISOString(),
-        snapshotRef: filename,
+        snapshotRef: `${shopId}/${cleanId}.jpg`,
         captureStatus: 'success',
         fileSizeBytes: stat.size,
         mimeType: 'image/jpeg',
@@ -296,22 +312,52 @@ const getSnapshotEvent = (eventId) => {
 
 /**
  * Get internal local file path for an authorized binary download.
+ * Resolves against shop-specific subdirectories and root storage directories.
  */
 const getSnapshotFilePath = (eventId) => {
   if (!isSafeEventId(eventId)) return null;
+  const cleanId = String(eventId).replace(/\.jpg$/i, '');
 
-  const event = snapshotEvents.find((e) => e.eventId === eventId);
+  const event = snapshotEvents.find((e) => e.eventId === cleanId);
   if (event && event._localPath && fs.existsSync(event._localPath)) {
     return event._localPath;
   }
-  const filename = `${eventId}.jpg`;
-  const filePath = path.join(SNAPSHOT_STORAGE_DIR, filename);
 
-  const resolvedPath = path.resolve(filePath);
-  const resolvedBase = path.resolve(SNAPSHOT_STORAGE_DIR);
-  if (!resolvedPath.startsWith(resolvedBase)) return null;
+  const parts = cleanId.split('_');
+  const shopId = parts[1] || 'station';
+  const filename = `${cleanId}.jpg`;
 
-  return fs.existsSync(filePath) ? filePath : null;
+  const candidatePaths = [
+    path.join(SNAPSHOT_STORAGE_DIR, shopId, filename),
+    path.join(SNAPSHOT_STORAGE_DIR, filename),
+    path.join(__dirname, '../../storage/snapshots', shopId, filename),
+    path.join(__dirname, '../../storage/snapshots', filename)
+  ];
+
+  for (const candPath of candidatePaths) {
+    const resolvedPath = path.resolve(candPath);
+    if (fs.existsSync(resolvedPath)) {
+      return resolvedPath;
+    }
+  }
+
+  // Scan subdirectories in SNAPSHOT_STORAGE_DIR
+  try {
+    if (fs.existsSync(SNAPSHOT_STORAGE_DIR)) {
+      const entries = fs.readdirSync(SNAPSHOT_STORAGE_DIR);
+      for (const entry of entries) {
+        const subPath = path.join(SNAPSHOT_STORAGE_DIR, entry);
+        if (fs.statSync(subPath).isDirectory()) {
+          const checkFile = path.join(subPath, filename);
+          if (fs.existsSync(checkFile)) {
+            return checkFile;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  return null;
 };
 
 /**
@@ -319,25 +365,25 @@ const getSnapshotFilePath = (eventId) => {
  */
 const deleteSnapshot = (eventId) => {
   if (!isSafeEventId(eventId)) return null;
+  const cleanId = String(eventId).replace(/\.jpg$/i, '');
 
-  const index = snapshotEvents.findIndex((e) => e.eventId === eventId);
-  if (index === -1) return null;
+  const index = snapshotEvents.findIndex((e) => e.eventId === cleanId);
+  const filePath = getSnapshotFilePath(cleanId);
 
-  const event = snapshotEvents[index];
-  if (event._localPath && fs.existsSync(event._localPath)) {
+  if (filePath && fs.existsSync(filePath)) {
     try {
-      fs.unlinkSync(event._localPath);
-    } catch (_) {
-      // Ignored
-    }
+      fs.unlinkSync(filePath);
+    } catch (_) {}
   }
 
-  snapshotEvents.splice(index, 1);
-  return { success: true, eventId };
+  if (index !== -1) {
+    snapshotEvents.splice(index, 1);
+  }
+  return { success: true, eventId: cleanId };
 };
 
 /**
- * Deletes snapshots older than specified retention hours.
+ * Deletes snapshots older than specified retention hours across all shop directories.
  */
 const cleanupOldSnapshots = (retentionHours = SNAPSHOT_RETENTION_HOURS) => {
   const cutoffTime = Date.now() - retentionHours * 60 * 60 * 1000;
@@ -358,24 +404,34 @@ const cleanupOldSnapshots = (retentionHours = SNAPSHOT_RETENTION_HOURS) => {
     return true;
   });
 
-  // 2. Scan snapshot directory for any untracked or orphaned files older than cutoff
+  // 2. Scan snapshot directories recursively for untracked or orphaned files older than cutoff
   let deletedOrphanFiles = 0;
-  try {
-    if (fs.existsSync(SNAPSHOT_STORAGE_DIR)) {
-      const files = fs.readdirSync(SNAPSHOT_STORAGE_DIR);
-      for (const file of files) {
-        if (!file.endsWith('.jpg') && !file.endsWith('.jpeg')) continue;
-        const filePath = path.join(SNAPSHOT_STORAGE_DIR, file);
+  const scanAndPruneDir = (dirPath) => {
+    let count = 0;
+    if (!fs.existsSync(dirPath)) return count;
+    try {
+      const entries = fs.readdirSync(dirPath);
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry);
         try {
-          const stat = fs.statSync(filePath);
-          if (stat.mtimeMs < cutoffTime) {
-            fs.unlinkSync(filePath);
-            deletedOrphanFiles += 1;
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            count += scanAndPruneDir(fullPath);
+          } else if ((entry.endsWith('.jpg') || entry.endsWith('.jpeg')) && stat.mtimeMs < cutoffTime) {
+            fs.unlinkSync(fullPath);
+            count += 1;
           }
         } catch (_) {}
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+    return count;
+  };
+
+  deletedOrphanFiles += scanAndPruneDir(SNAPSHOT_STORAGE_DIR);
+  const legacyDir = path.join(__dirname, '../../storage/snapshots');
+  if (legacyDir !== SNAPSHOT_STORAGE_DIR && fs.existsSync(legacyDir)) {
+    deletedOrphanFiles += scanAndPruneDir(legacyDir);
+  }
 
   return { deletedCount: deletedFromEvents + deletedOrphanFiles };
 };
@@ -397,6 +453,7 @@ const resetSnapshotService = () => {
 
 module.exports = {
   captureSnapshot,
+  saveSnapshot,
   listSnapshotsByShop,
   getSnapshotEvent,
   getSnapshotFilePath,

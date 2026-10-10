@@ -541,7 +541,10 @@ const verifyWorkerEvent = (eventId, action, reviewerNotes = null, managerId = 'a
     if (workerId) {
       const worker = workerService.getWorkerById(workerId);
       if (!worker) {
-        throw new Error(`Worker ID '${workerId}' not found in Station workshop roster`);
+        throw new Error(`Worker ID '${workerId}' not found in workshop roster`);
+      }
+      if (record.shopId && worker.shopId && worker.shopId.toLowerCase() !== record.shopId.toLowerCase()) {
+        throw new Error(`Worker '${worker.name}' (${workerId}) belongs to '${worker.shopId}', not '${record.shopId}'`);
       }
       if (!worker.active) {
         throw new Error(`Worker '${worker.name}' (${workerId}) is marked inactive`);
@@ -911,5 +914,6 @@ module.exports = {
   isPointInPolygon,
   STATION_BAY_POLYGON,
   loadSessionsFromDisk,
-  saveSessionsToDisk
+  saveSessionsToDisk,
+  getAllWorkerEvents: () => workerEvents
 };

@@ -48,8 +48,8 @@ test('1. GET /api/workers returns Station workers for dropdown and requires admi
   assert.ok(activeData.workers.every((w) => w.active === true));
 });
 
-test('2. POST /api/workers creates worker for Station and rejects other shops', async () => {
-  // Rejecting other shops (e.g. Camden)
+test('2. POST /api/workers creates worker for Station and rejects unauthorized shops', async () => {
+  // Rejecting unauthorized shops (e.g. Manchester)
   const rejectRes = await fetch(`${baseUrl}/api/workers`, {
     method: 'POST',
     headers: {
@@ -57,9 +57,9 @@ test('2. POST /api/workers creates worker for Station and rejects other shops', 
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      name: 'Bob Camden',
+      name: 'Bob Manchester',
       role: 'Mechanic',
-      shopId: 'camden'
+      shopId: 'manchester'
     })
   });
   assert.equal(rejectRes.status, 400);

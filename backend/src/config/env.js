@@ -13,8 +13,8 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'pixx_admin_secret_key';
 
 const defaultSnapshotDir = isServerless
-  ? path.join(os.tmpdir(), 'pixx-cctv', 'snapshots')
-  : path.join(__dirname, '../../storage/snapshots');
+  ? path.join(os.tmpdir(), 'pixx-cctv', 'private_snapshots')
+  : path.join(__dirname, '../../storage/private_snapshots');
 
 const SNAPSHOT_STORAGE_DIR = process.env.SNAPSHOT_STORAGE_DIR
   ? path.resolve(process.env.SNAPSHOT_STORAGE_DIR)

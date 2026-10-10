@@ -7,10 +7,11 @@ const workerService = require('../services/workerService');
 const listWorkers = (req, res, next) => {
   try {
     const shopId = (req.query.shopId || 'station').toLowerCase();
-    if (shopId !== 'station') {
+    const authorizedShops = ['station', 'camden', 'chelsea', 'edgeware', 'southwark', 'leabridge'];
+    if (!authorizedShops.includes(shopId)) {
       return res.status(400).json({
         error: 'Unsupported shop',
-        details: 'Worker management is currently restricted to Station Cycles only'
+        details: `Shop '${shopId}' is not an authorized shop`
       });
     }
 
@@ -18,7 +19,7 @@ const listWorkers = (req, res, next) => {
     const workers = workerService.listWorkers({ shopId, activeOnly });
 
     res.status(200).json({
-      shopId: 'station',
+      shopId,
       count: workers.length,
       workers
     });
@@ -28,16 +29,18 @@ const listWorkers = (req, res, next) => {
 };
 
 /**
- * Creates a new worker profile for Station Cycles workshop.
+ * Creates a new worker profile for an authorized workshop.
  */
 const createWorker = (req, res, next) => {
   try {
-    const { name, role, shopId = 'station' } = req.body || {};
+    const { name, role, shopId = 'station', shiftStart = '08:30' } = req.body || {};
+    const normShop = (shopId || 'station').toLowerCase();
+    const authorizedShops = ['station', 'camden', 'chelsea', 'edgeware', 'southwark', 'leabridge'];
 
-    if (shopId && shopId.toLowerCase() !== 'station') {
+    if (!authorizedShops.includes(normShop)) {
       return res.status(400).json({
         error: 'Unsupported shop',
-        details: 'Worker management is currently restricted to Station Cycles only'
+        details: `Shop '${shopId}' is not an authorized shop`
       });
     }
 
@@ -55,7 +58,7 @@ const createWorker = (req, res, next) => {
       });
     }
 
-    const worker = workerService.createWorker({ name, role, shopId: 'station' });
+    const worker = workerService.createWorker({ name, role, shopId: normShop, shiftStart });
 
     res.status(201).json({
       message: 'Worker profile created successfully',
@@ -150,10 +153,11 @@ const getWorkerAttendance = (req, res, next) => {
 const listAttendanceRecords = (req, res, next) => {
   try {
     const shopId = (req.query.shopId || 'station').toLowerCase();
-    if (shopId !== 'station') {
+    const authorizedShops = ['station', 'camden', 'chelsea', 'edgeware', 'southwark', 'leabridge'];
+    if (!authorizedShops.includes(shopId)) {
       return res.status(400).json({
         error: 'Unsupported shop',
-        details: 'Attendance records are currently restricted to Station Cycles only'
+        details: `Shop '${shopId}' is not an authorized shop`
       });
     }
 
@@ -589,18 +593,20 @@ const renderReviewInterface = (req, res) => {
               <tr>
                 <th>Attendance ID</th>
                 <th>Worker Name</th>
-                <th>Observed Snapshot Time</th>
-                <th>Estimated Exit</th>
-                <th>Dwell Time</th>
+                <th>Scheduled Shift</th>
+                <th>Observed Arrival</th>
+                <th>Departure Status</th>
+                <th>Lateness</th>
                 <th>Uncertainty Status</th>
-                <th>Review Status</th>
-                <th>Payroll Impact</th>
+                <th>Proposed Deduction</th>
+                <th>Payroll Status</th>
                 <th>Arrival Photo</th>
                 <th>Confirmed By</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="attendance-table-body">
-              <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Loading attendance records...</td></tr>
+              <tr><td colspan="12" style="text-align: center; color: var(--text-muted);">Loading attendance records...</td></tr>
             </tbody>
           </table>
         </div>
@@ -945,7 +951,11 @@ const renderReviewInterface = (req, res) => {
           if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #ef4444;">&#9888; Authentication required. Enter Administrator API Key above.</td></tr>';
           return;
         }
-        if (!res.ok) return;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #ef4444;">&#9888; Error loading roster: ' + (errData.error || res.statusText) + '</td></tr>';
+          return;
+        }
         const data = await res.json();
         activeWorkers = data.workers || [];
 
@@ -972,7 +982,7 @@ const renderReviewInterface = (req, res) => {
           </tr>
         \`).join('');
       } catch (err) {
-        console.error('Failed to load workers:', err);
+        if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #ef4444;">&#9888; Network / Execution Error: ' + err.message + '</td></tr>';
       }
     }
 
@@ -986,7 +996,11 @@ const renderReviewInterface = (req, res) => {
           if (container) container.innerHTML = '<p style="color: #ef4444;">&#9888; Authentication required. Enter Administrator API Key above.</p>';
           return;
         }
-        if (!res.ok) return;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          if (container) container.innerHTML = '<div style="background: #111827; border: 1px solid #ef4444; border-radius: 6px; padding: 16px; color: #ef4444; text-align: center;">&#9888; Error loading candidate events: ' + (errData.error || res.statusText) + '</div>';
+          return;
+        }
         const data = await res.json();
         const events = data.events || [];
         if (pendingCount) pendingCount.textContent = events.length;
@@ -1097,7 +1111,7 @@ const renderReviewInterface = (req, res) => {
           });
         }
       } catch (err) {
-        console.error('Failed to load events:', err);
+        if (container) container.innerHTML = '<div style="background: #111827; border: 1px solid #ef4444; border-radius: 6px; padding: 16px; color: #ef4444; text-align: center;">&#9888; Network / Execution Error: ' + err.message + '</div>';
       }
     }
 
@@ -1106,51 +1120,129 @@ const renderReviewInterface = (req, res) => {
       try {
         const res = await fetch('/api/workers/attendance?shopId=station', { headers: getHeaders() });
         if (res.status === 401) {
-          if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #ef4444; padding: 20px;">&#9888; Authentication required. Enter Administrator API Key above.</td></tr>';
+          if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: #ef4444; padding: 20px;">&#9888; Authentication required. Enter Administrator API Key above.</td></tr>';
           return;
         }
-        if (!res.ok) return;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: #ef4444; padding: 20px;">&#9888; Error loading attendance records: ' + (errData.error || res.statusText) + '</td></tr>';
+          return;
+        }
         const data = await res.json();
         const records = data.records || [];
 
         if (records.length === 0) {
-          if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">No attendance records found yet.<br><span style="font-size: 12px; color: #64748b;">Attendance records are created when candidate events in the "Candidate Events Review" tab are approved with an assigned worker.</span></td></tr>';
+          if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: var(--text-muted); padding: 24px;">No attendance records found yet.<br><span style="font-size: 12px; color: #64748b;">Attendance records are created when candidate events in the "Candidate Events Review" tab are approved with an assigned worker.</span></td></tr>';
           return;
         }
 
         if (tbody) tbody.innerHTML = records.map(r => {
-          const arrUkTime = r.firstSeenTime
-            ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(r.firstSeenTime)) + ' BST/GMT (' + r.date + ')'
-            : r.date;
-          const exitUkTime = r.lastSeenTime
-            ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(r.lastSeenTime))
-            : 'Active';
+          const arrTime = r.observedArrival || r.firstSeenTime;
+          const arrUkTime = arrTime
+            ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(arrTime)) + ' BST/GMT'
+            : (r.date || 'Recorded');
+
+          const departureText = r.departureTime
+            ? (new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(r.departureTime)) + ' BST/GMT')
+            : (r.departureStatus === 'unobserved' ? '<span class="badge badge-warning">Unobserved</span>' : '<span class="badge badge-info">Active (Not Departed)</span>');
+
+          const lateMinutes = typeof r.lateMinutes === 'number' ? r.lateMinutes : 0;
+          const lateBadge = lateMinutes > 0
+            ? '<span class="badge badge-warning">' + lateMinutes + 'm Late</span>'
+            : '<span class="badge badge-success">On Time</span>';
+
+          const proposedDeductionText = (r.proposedDeduction && r.proposedDeduction.estimatedDeduction)
+            ? '<span style="font-size: 11px;" title="' + (r.proposedDeduction.approvalStatus || 'Requires Human Approval') + '">' + r.proposedDeduction.estimatedDeduction + '<br><span style="color:#f59e0b;font-size:10px;">(Pending Approval)</span></span>'
+            : '<span style="color: #94a3b8;">£0.00</span>';
+
+          const uncertaintyBadge = r.uncertainTimes
+            ? '<span class="badge badge-warning" title="' + (r.uncertaintyReasons || []).join(', ') + '">&#9888; Uncertain Boundary</span>'
+            : '<span class="badge badge-success">&#10003; Confirmed Sustained</span>';
+
+          const confirmedInfo = (r.confirmedBy || 'Manager') + (r.updatedBy ? '<br><span style="font-size: 10px; color: #94a3b8;">Updated: ' + r.updatedBy + '</span>' : '');
 
           return \`
             <tr>
               <td><code>\${r.attendanceId}</code></td>
               <td><strong>\${r.workerName}</strong> (<code>\${r.workerId}</code>)</td>
+              <td><code>\${r.scheduledStart || '08:30'}</code></td>
               <td>\${arrUkTime}</td>
-              <td>\${exitUkTime}</td>
-              <td>\${r.dwellTimeSeconds}s</td>
-              <td>
-                \${r.uncertainTimes
-                  ? '<span class="badge badge-warning" title="' + (r.uncertaintyReasons || []).join(', ') + '">&#9888; Uncertain Boundary</span>'
-                  : '<span class="badge badge-success">&#10003; Confirmed Sustained</span>'}
-              </td>
-              <td><span class="badge badge-success">\${r.reviewStatus}</span></td>
-              <td><span class="badge badge-info">none</span></td>
+              <td>\${departureText}</td>
+              <td>\${lateBadge}</td>
+              <td>\${uncertaintyBadge}</td>
+              <td>\${proposedDeductionText}</td>
+              <td><span class="badge badge-info">none (disabled)</span></td>
               <td>
                 <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="downloadArrivalPhoto('\${r.eventId}')">
-                  📸 Download Photo
+                  📸 Photo
                 </button>
               </td>
-              <td>\${r.confirmedBy}</td>
+              <td>\${confirmedInfo}</td>
+              <td>
+                <div style="display: flex; gap: 4px; flex-direction: column;">
+                  <button class="btn btn-secondary" style="padding: 2px 6px; font-size: 11px;" onclick="correctAttendanceAssignment('\${r.eventId}', '\${r.workerId}')">
+                    ✏️ Correct
+                  </button>
+                  <button class="btn btn-danger" style="padding: 2px 6px; font-size: 11px;" onclick="dismissAttendanceEvent('\${r.eventId}')">
+                    ✕ Dismiss
+                  </button>
+                </div>
+              </td>
             </tr>
           \`;
         }).join('');
       } catch (err) {
-        console.error('Failed to load attendance:', err);
+        if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: #ef4444; padding: 20px;">&#9888; Network / Execution Error: ' + err.message + '</td></tr>';
+      }
+    }
+
+    async function correctAttendanceAssignment(eventId, currentWorkerId) {
+      if (!activeWorkers || activeWorkers.length === 0) {
+        await loadWorkers();
+      }
+      const workerList = activeWorkers.filter(w => w.active).map(w => w.workerId + ': ' + w.name).join('\\n');
+      const newWorkerId = prompt('Current Worker: ' + currentWorkerId + '\\n\\nEnter new Worker ID from the list below to correct assignment:\\n\\n' + workerList);
+      if (!newWorkerId) return;
+      const reason = prompt('Enter reason for correction (for audit trail):', 'Manager corrected technician assignment');
+      if (reason === null) return;
+      try {
+        const res = await fetch('/api/workers/events/' + encodeURIComponent(eventId) + '/verify', {
+          method: 'PATCH',
+          headers: getHeaders(),
+          body: JSON.stringify({ action: 'approve_worker', workerId: newWorkerId.trim(), notes: reason })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert('Correction failed: ' + (err.error || res.statusText));
+          return;
+        }
+        alert('Assignment corrected successfully with audit log!');
+        await loadAttendance();
+      } catch (err) {
+        alert('Request failed: ' + err.message);
+      }
+    }
+
+    async function dismissAttendanceEvent(eventId) {
+      if (!confirm('Are you sure you want to dismiss this event as a customer? This will remove the attendance record and update the audit trail.')) return;
+      const reason = prompt('Enter reason for dismissal (e.g. customer walked into bay):', 'Re-classified as customer');
+      if (reason === null) return;
+      try {
+        const res = await fetch('/api/workers/events/' + encodeURIComponent(eventId) + '/verify', {
+          method: 'PATCH',
+          headers: getHeaders(),
+          body: JSON.stringify({ action: 'dismiss_customer', notes: reason })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert('Dismissal failed: ' + (err.error || res.statusText));
+          return;
+        }
+        alert('Event re-classified as customer and attendance record removed.');
+        await loadAttendance();
+        await loadEvents();
+      } catch (err) {
+        alert('Request failed: ' + err.message);
       }
     }
 
@@ -1411,10 +1503,11 @@ const renderReviewInterface = (req, res) => {
 const getAttendanceShareSummary = (req, res, next) => {
   try {
     const shopId = (req.query.shopId || 'station').toLowerCase();
-    if (shopId !== 'station') {
+    const authorizedShops = ['station', 'camden', 'chelsea', 'edgeware', 'southwark', 'leabridge'];
+    if (!authorizedShops.includes(shopId)) {
       return res.status(400).json({
         error: 'Unsupported shop',
-        details: 'Attendance summary is currently restricted to Station Cycles only'
+        details: `Shop '${shopId}' is not an authorized shop`
       });
     }
 

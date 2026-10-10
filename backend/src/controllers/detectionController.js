@@ -72,7 +72,7 @@ const detectStationWorkers = async (req, res, next) => {
 const listWorkerEvents = (req, res, next) => {
   try {
     const filters = {
-      shopId: 'station',
+      shopId: req.query.shopId || 'station',
       reviewStatus: req.query.status
     };
     const events = detectionService.listWorkerEvents(filters);
@@ -113,7 +113,8 @@ const verifyWorkerEvent = (req, res, next) => {
   } catch (error) {
     if (
       error.message?.includes('Invalid review action') ||
-      error.message?.includes('not found in Station') ||
+      error.message?.includes('not found') ||
+      error.message?.includes('belongs to') ||
       error.message?.includes('marked inactive')
     ) {
       return res.status(400).json({ error: error.message });
@@ -302,12 +303,15 @@ const getWorkerEventSnapshot = (req, res, next) => {
     const { eventId } = req.params;
     const events = detectionService.listWorkerEvents();
     const event = events.find((e) => e.eventId === eventId);
-    if (!event || !event.snapshotRef) {
+    const snapEvent = snapshotService.getSnapshotEvent(eventId);
+    if (!event && !snapEvent) {
       return res.status(404).json({ error: 'Snapshot reference not found for event' });
     }
 
-    const baseName = path.basename(event.snapshotRef);
+    const snapRef = event?.snapshotRef || snapEvent?.snapshotRef || eventId;
+    const baseName = path.basename(snapRef);
     const snapId = baseName.replace(/\.jpg$/i, '');
+
     let finalPath = snapshotService.getSnapshotFilePath(snapId);
     if (!finalPath || !fs.existsSync(finalPath)) {
       const bundledPath = path.join(__dirname, '../assets/default_station_snapshot.jpg');
@@ -319,7 +323,7 @@ const getWorkerEventSnapshot = (req, res, next) => {
     }
 
     res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     return fs.createReadStream(finalPath).pipe(res);
   } catch (error) {
     next(error);
